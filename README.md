@@ -1,6 +1,8 @@
 # czexpressvpn
 Graphical interface for ExpressVPN on Linux
 
+Copyright 2017 Alexander Czutro
+
 ExpressVPN (https://www.expressvpn.com) is a commercial provider of VPN
 services that supports all operating systems, including Android.  However, it
 only provides a command line tool for Linux systems.
