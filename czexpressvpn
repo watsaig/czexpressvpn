@@ -27,126 +27,146 @@
 #
 ###############################################################################
 
+import sys;
+import os;
+import subprocess;
+
 import pygtk;
 pygtk.require('2.0');
 import gtk;
 import gobject;
-import sys;
-from subprocess import Popen, PIPE;
-import os;
-
 
 
 ### constants #################################################################
 
-MAIN_DATE	= "13/03/2017";
-MAIN_THIS	= os.path.basename(sys.argv[0]);
-EXPRESSVPN      = 'expressvpn';
+_EXPRESSVPN = 'expressvpn';
 
+
+### help functions ############################################################
+
+def call(*args):
+    '''
+    Runs a non-interactive sub-process and returns its outputs and
+    exit code.
+    '''
+    P = subprocess.Popen(args,
+                         stdin=None,
+                         stdout=subprocess.PIPE,
+                         stderr=subprocess.PIPE
+    );
+    stdout, stderr = P.communicate();
+    return stdout, stderr, P.returncode;
+#call
 
 
 ### tray-based hub ############################################################
 
 class Trayhub:
+    '''Main application class around a "system tray" icon.'''
 
-    ### functionality functions ###############################################
+    ### class constructor #########################################
+
+    def __init__(self):
+        self.status = None; # string: None or location name
+        self.locations = [];
+        self.cursleep = gobject.timeout_add_seconds(60, self.forever_loop);
+
+        self.status_icon = gtk.StatusIcon();
+        self.icon_menu_connection = self.status_icon.connect(
+            'button-press-event', self.show_menu
+        );
+        self.menu = gtk.Menu();
+        self.submenu = gtk.Menu();
+
+        self.update_all();
+
+        return;
+    #__init__
+
+    ### back-end functions ########################################
 
     def get_status(self):
-        p = Popen([EXPRESSVPN, 'status'],
-                  stdin=None, stdout=PIPE, stderr=PIPE
-        );
-        output, err = p.communicate();
-        if p.returncode != 0:
-            return;             # if call failed, do nothing
+        '''Updates self.status according to expressvpn status call.'''
+        stdout, stderr, retcode = call(_EXPRESSVPN, 'status');
+        if retcode != 0:
+            return; # if call failed, do nothing
         #if
-        output_array = output.replace('\n', '').split(' ');
-        if output_array[0:2:1] == ['Not', 'connected.']:
+        output_array = stdout.replace('\n', '').split(' ');
+        first_two = ''.join(output_array[0:2]);
+        if first_two == 'Notconnected.':
             self.status = None;
-        elif output_array[0:2:1] == ['Connected', 'to']:
-            location = output_array[2];
-            for i in range(3, len(output_array)):
-                location += ' ' + output_array[i];
-            #for
-            self.status= location;
+        elif first_two == 'Connectedto':
+            self.status = ' '.join(output_array[2:]);
         else:
-            print('possible bug; expressvpn returned\n' + output + err);
+            print('possible bug; expressvpn returned:\n', stdout, stderr);
         #else
         return;
     #get_status
 
+
     def get_locations(self, argument):
-        command_line = [EXPRESSVPN, 'list'];
-        if argument != None:
+        '''
+        Updates self.locations to contain the locations requested in
+        'argument'. (See documentation for 'expressvpn list'.)
+        '''
+        command_line = [_EXPRESSVPN, 'list'];
+        if argument is not None:
             command_line.append(argument);
         #if
-        p = Popen(command_line, stdin=None, stdout=PIPE, stderr=PIPE);
-        output, err = p.communicate();
-        if p.returncode != 0:
-            message = gtk.MessageDialog(parent=None,
-                                        flags=0,
-                                        type=gtk.MESSAGE_ERROR,
-                                        buttons=gtk.BUTTONS_CLOSE,
-                                        message_format=
-                                        ("expressvpn list failed\n" + err)
+        stdout, stderr, retcode = call(*command_line);
+        if retcode != 0:
+            message = gtk.MessageDialog(
+                parent=None,
+                flags=0,
+                type=gtk.MESSAGE_ERROR,
+                buttons=gtk.BUTTONS_CLOSE,
+                message_format=("expressvpn list failed:\n%s" % stderr)
             );
             message.run();
             message.destroy();
         else:
-            output_lines = output.split('\n');
+            output_lines = stdout.split('\n');
             output_matrix = [];
-            for i in output_lines:
-                output_matrix.append(i.split('\t'));
+            for line in output_lines:
+                output_matrix.append(line.split('\t'));
             #for
             self.locations = [];
             if argument == 'recent':
-                distilled_matrix = [];
-                for i in output_matrix:
-                    line = [];
-                    for j in i:
-                        if j != '':
-                            line.append(j);
-                        #if
-                    #for
-                    distilled_matrix.append(line);
-                #for
-                for i in distilled_matrix:
-                    if(len(i) > 0 and
-                       i[0] != 'ALIAS' and i[0] != '-----' and i[0] != ''
-                       ):
-                        self.locations.append([i[0], i[-2]]);
+                distilled_matrix = [
+                    [token for token in row if token]
+                    for row in output_matrix
+                ];
+                for row in distilled_matrix:
+                    if row and row[0] not in ['ALIAS', '-----', '']:
+                        self.locations.append([row[0], row[-2]]);
                     #if
                 #for
             elif argument == 'recommended':
-                for i in output_matrix:
-                    if(len(i) > 0 and
-                       i[0] != 'ALIAS' and i[0] != '-----' and i[0] != ''
-                       ):
-                        self.locations.append([i[0], i[-1]]);
+                for row in output_matrix:
+                    if row and row[0] not in ['ALIAS', '-----', '']:
+                        self.locations.append([row[0], row[-1]]);
                     #if
                 #for
             else:
-                distilled_matrix = [];
-                for i in output_matrix:
-                    line = [];
-                    for j in i:
-                        if j != '' and j != 'Y':
-                            line.append(j);
-                        #if
-                    #for
-                    distilled_matrix.append(line);
-                #for
-                for i in distilled_matrix:
-                    if(len(i) > 0 and
-                       i[0] != 'ALIAS' and i[0] != '-----' and i[0] != ''
-                       ):
-                        self.locations.append([i[0], i[-1]]);
+                distilled_matrix = [[token for token in row
+                                     if token not in ['', 'Y']]
+                                    for row in output_matrix
+                ];
+                for row in distilled_matrix:
+                    if row and row not in ['ALIAS', '-----', '']:
+                        self.locations.append([row[0], row[-1]]);
                     #if
                 #for
             #else
         return;
     #get_locations
-    
+
+
     def do_list(self, widget, argument):
+        '''
+        Opens a popup menu offering to connect to a list of locations.
+        'argument': see documentation for 'expressvpn list'.
+        '''
         self.get_locations(argument);
         self.update_submenu();
         self.submenu.popup(None, None, gtk.status_icon_position_menu,
@@ -154,22 +174,24 @@ class Trayhub:
         );
         return;
     #do_list
-    
+
+
     def do_connect(self, widget, argument):
-        command_line = [EXPRESSVPN, 'connect'];
-        if argument != None:
+        '''Connect to a location.'''
+        command_line = [_EXPRESSVPN, 'connect'];
+        if argument is not None:
             command_line.append(argument);
         #if
-        p = Popen(command_line, stdin=None, stdout=PIPE, stderr=PIPE);
-        output, err = p.communicate();
-        if p.returncode != 0:
-            message = gtk.MessageDialog(parent=None,
-                                        flags=0,
-                                        type=gtk.MESSAGE_ERROR,
-                                        buttons=gtk.BUTTONS_CLOSE,
-                                        message_format=
-                                        ("expressvpn connect " + argument
-                                         + " failed\n" + err)
+        stdout, stderr, retcode = call(*command_line);
+        if retcode != 0:
+            message = gtk.MessageDialog(
+                parent=None,
+                flags=0,
+                type=gtk.MESSAGE_ERROR,
+                buttons=gtk.BUTTONS_CLOSE,
+                message_format=(
+                    "'expressvpn connect %s' failed:\n%s" % (argument, err)
+                )
             );
             message.run();
             message.destroy();
@@ -179,18 +201,20 @@ class Trayhub:
         return;
     #do_connect
 
+
     def do_disconnect(self, widget):
-        p = Popen([EXPRESSVPN, 'disconnect'], stdin=None, stdout=PIPE, stderr=PIPE);
-        output, err = p.communicate();
-        if p.returncode == 0:
+        '''Disconnect and update status.'''
+        stdout, stderr, retcode = call(_EXPRESSVPN, 'disconnect');
+        if retcode == 0:
             self.update_all();
         #if
         return;
     #do_disconnect
-    
-    ### painting functions ########################################################
+
+    ### painting functions ########################################
 
     def pic_label_box(self, image, text):
+        '''Returns an hbox containing the given image and text.'''
         box = gtk.HBox(False, 13);
         im = gtk.Image();
         im.set_from_stock(image, gtk.ICON_SIZE_MENU);
@@ -200,7 +224,9 @@ class Trayhub:
         return box;
     #pic_label_box
 
+
     def update_icon(self):
+        '''Update the system tray icon.'''
         if self.status == None:
             self.status_icon.set_from_stock(gtk.STOCK_DISCONNECT);
             self.status_icon.set_tooltip("disconnected");
@@ -211,8 +237,10 @@ class Trayhub:
         self.status_icon.set_visible(True);
         return;
     #update_icon
-    
+
+
     def show_menu(self, widget, event):
+        '''Pops open the main menu.'''
         self.menu.popup(None, None, gtk.status_icon_position_menu,
                         event.button, event.time, self.status_icon
         );
@@ -221,189 +249,176 @@ class Trayhub:
 
 
     def show_about(self, widget):
-        abwin = gtk.Window(gtk.WINDOW_TOPLEVEL);
-        abwin.set_type_hint(gtk.gdk.WINDOW_TYPE_HINT_DIALOG);
-        abwin.set_resizable(False);
-        abwin.set_deletable(False);
-        abwin.set_border_width(11);
-        abwin.set_position(gtk.WIN_POS_CENTER_ALWAYS);
-        abwin.set_title("About czexpressvpn");
-        abbox = gtk.VBox(False, 0);
-        abwin.add(abbox);
-        ablab = gtk.Label();
-        ablab.set_justify(gtk.JUSTIFY_CENTER);
-        ablab.set_markup(
-            '''<b>czexpressvpn - graphical interface for ExpressVPN</b>
+        '''Open an info window.'''
+        about_window = gtk.Window(gtk.WINDOW_TOPLEVEL);
+        about_window.set_type_hint(gtk.gdk.WINDOW_TYPE_HINT_DIALOG);
+        about_window.set_resizable(False);
+        about_window.set_deletable(False);
+        about_window.set_border_width(11);
+        about_window.set_position(gtk.WIN_POS_CENTER_ALWAYS);
+        about_window.set_title('About czexpressvpn');
+        about_box = gtk.VBox(False, 0);
+        about_window.add(about_box);
+        about_contents = gtk.Label();
+        about_contents.set_markup(
+            '''<span face="monospace"><b>czexpressvpn - graphical interface for ExpressVPN</b>
 
-Copyright 2017 Alexander Czutro
+<i>Copyright 2017 Alexander Czutro</i>
 
 This program is free software: you can redistribute it or modify it
-under the terms of the GNU General Public License as published by the
-Free Software Foundation, either version 3 of the License, or (at your
-option) any later version.
+under the terms  of the GNU General Public License  as published by
+the Free Software  Foundation, either version 3 of  the License, or
+(at your option) any later version.
 
 This program is distributed in the hope that it will be useful, but
-WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+WITHOUT  ANY  WARRANTY;  without   even  the  implied  warranty  of
+MERCHANTABILITY or FITNESS  FOR A PARTICULAR PURPOSE.   See the GNU
 General Public License for more details.
 
-You should have received a copy of the GNU General Public License
-along with this program.  If not, see http://www.gnu.org/licenses/.
-            '''
+You should have  received a copy of the GNU  General Public License
+along with this program.  If not, see http://www.gnu.org/licenses/.</span>
+'''
         );
-        abbox.pack_start(ablab);
-        abbut = gtk.Button("_OK");
-        abbox.pack_start(abbut);
-        abbut.connect_object("clicked", gtk.Widget.destroy, abwin);
-        abwin.show_all();
+        about_box.pack_start(about_contents);
+        about_ok = gtk.Button("_OK");
+        about_box.pack_start(about_ok);
+        about_ok.connect_object("clicked", gtk.Widget.destroy, about_window);
+        about_window.show_all();
     #show_about
-    
-    
+
+
     def update_menu(self):
+        '''Updates the contents of the main menu.'''
         self.menu = gtk.Menu();
 
-        self.menuItem = gtk.MenuItem();
-        self.menuItem.add(self.pic_label_box(gtk.STOCK_ABOUT, "about"));
-        self.menuItem.connect('activate', self.show_about);
-        self.menu.append(self.menuItem);
+        menu_item = gtk.MenuItem();
+        menu_item.add(self.pic_label_box(gtk.STOCK_ABOUT, "about"));
+        menu_item.connect('activate', self.show_about);
+        self.menu.append(menu_item);
 
         self.menu.append(gtk.SeparatorMenuItem());
-        
-        self.menu_item = gtk.MenuItem();
-        if self.status == None:
-            self.menu_item.add(self.pic_label_box(gtk.STOCK_NO,
-                                                  "disconnected")
+
+        menu_item = gtk.MenuItem();
+        if self.status is None:
+            menu_item.add(
+                self.pic_label_box(gtk.STOCK_NO, "disconnected")
             );
         else:
-            self.menu_item.add(self.pic_label_box(gtk.STOCK_YES, self.status));
+            menu_item.add(self.pic_label_box(gtk.STOCK_YES, self.status));
         #else
-        self.menu_item.connect('activate', self.update_all, None);
-        self.menu.append(self.menu_item);
-        
+        menu_item.connect('activate', self.update_all, None);
+        self.menu.append(menu_item);
+
         self.menu.append(gtk.SeparatorMenuItem());
 
-        if self.status == None:
+        if self.status is None:
             self.get_locations('recent');
 
             if len(self.locations) == 0:
-                self.menu_item = gtk.MenuItem();
-                self.menu_item.add(
+                menu_item = gtk.MenuItem();
+                menu_item.add(
                     self.pic_label_box(gtk.STOCK_CONNECT,
-                                       "reconnect to last location")
+                                       'reconnect to last location')
                 );
-                self.menu_item.connect('activate', self.do_connect, None);
-                self.menu.append(self.menu_item);
+                menu_item.connect('activate', self.do_connect, None);
+                self.menu.append(menu_item);
             #if
-            
-            for [x, y] in self.locations:
-                self.menu_item = gtk.MenuItem();
-                self.menu_item.add(self.pic_label_box(gtk.STOCK_CONNECT,
-                                                      "connect to " + y)
+
+            for code, label in self.locations:
+                menu_item = gtk.MenuItem();
+                menu_item.add(self.pic_label_box(gtk.STOCK_CONNECT,
+                                                 'connect to ' + label)
                 );
-                self.menu_item.connect('activate', self.do_connect, x);
-                self.menu.append(self.menu_item);
+                menu_item.connect('activate', self.do_connect, code);
+                self.menu.append(menu_item);
             #for
 
-            self.menu_item = gtk.MenuItem();
-            self.menu_item.add(self.pic_label_box(gtk.STOCK_INDEX,
-                                                  "recommended locations")
+            menu_item = gtk.MenuItem();
+            menu_item.add(self.pic_label_box(gtk.STOCK_INDEX,
+                                             'recommended locations')
             );
-            self.menu_item.connect('activate', self.do_list, 'recommended');
-            self.menu.append(self.menu_item);
-            
-            self.menu_item = gtk.MenuItem();
-            self.menu_item.add(self.pic_label_box(gtk.STOCK_INDEX,
-                                                  "all locations")
+            menu_item.connect('activate', self.do_list, 'recommended');
+            self.menu.append(menu_item);
+
+            menu_item = gtk.MenuItem();
+            menu_item.add(self.pic_label_box(gtk.STOCK_INDEX,
+                                             'all locations')
             );
-            self.menu_item.connect('activate', self.do_list, None);
-            self.menu.append(self.menu_item);
+            menu_item.connect('activate', self.do_list, None);
+            self.menu.append(menu_item);
         else:
-            self.menu_item = gtk.MenuItem();
-            self.menu_item.add(self.pic_label_box(gtk.STOCK_DISCONNECT,
-                                                  "disconnect")
+            menu_item = gtk.MenuItem();
+            menu_item.add(self.pic_label_box(gtk.STOCK_DISCONNECT,
+                                             'disconnect')
             );
-            self.menu_item.connect('activate', self.do_disconnect);
-            self.menu.append(self.menu_item);
+            menu_item.connect('activate', self.do_disconnect);
+            self.menu.append(menu_item);
         #else
 
         self.menu.append(gtk.SeparatorMenuItem());
 
-        self.menu_item = gtk.MenuItem();
-        self.menu_item.add(self.pic_label_box(gtk.STOCK_QUIT, "exit"));
-        self.menu_item.connect('activate', self.do_exit);
-        self.menu.append(self.menu_item);
-    
+        menu_item = gtk.MenuItem();
+        menu_item.add(self.pic_label_box(gtk.STOCK_QUIT, 'exit'));
+        menu_item.connect('activate', self.do_exit);
+        self.menu.append(menu_item);
+
         self.menu.show_all();
         return;
     #update_menu
 
+
     def update_submenu(self):
+        '''Updates the sub-menu that contains the connection locations.'''
         self.submenu = gtk.Menu();
-        for [x, y] in self.locations:
+        for code, label in self.locations:
             self.menu_item = gtk.MenuItem();
             self.menu_item.add(self.pic_label_box(gtk.STOCK_CONNECT,
-                                                  "connect to " + y)
+                                                  'connect to ' + label)
             );
-            self.menu_item.connect('activate', self.do_connect, x);
+            self.menu_item.connect('activate', self.do_connect, code);
             self.submenu.append(self.menu_item);
         #for
         self.submenu.show_all();
         return;
     #update_submenu
 
+
     def update_all(self, arg1=None, arg2=None):
-        gobject.source_remove(self.cursleep);
+        '''Updates all internal objects and the internal status.'''
+        #gobject.source_remove(self.cursleep);
         self.get_status();
         self.update_icon();
         self.update_menu();
-        self.cursleep = gobject.timeout_add_seconds(60, self.forever_loop);
+        #self.cursleep = gobject.timeout_add_seconds(60, self.forever_loop);
         return;
     #update_all
 
+
     def do_exit(self, widget=None):
+        '''Quits the application.'''
         gobject.source_remove(self.cursleep);
         gtk.main_quit();
         return;
     #do_exit
 
+
     def forever_loop(self):
+        '''Tasks that need to be repeated regularly.'''
         self.update_all();
-        return False;
+        # function will continue to be called regularly while it
+        # returns True
+        return True;
     #forever_loop
-
-    ### class constructor #####################################################
-
-    def __init__(self):
-        # initialise private variables
-        self.status	= None;     # string: None or location name
-        self.locations	= [];
-        self.cursleep	= gobject.timeout_add_seconds(60, self.forever_loop);
-        
-        # display the icon
-        self.status_icon = gtk.StatusIcon();
-
-        # build the menus
-        self.menu = gtk.Menu();
-        self.icon_menu_connection = self.status_icon.connect(
-            'button-press-event', self.show_menu
-        );
-        self.submenu = gtk.Menu();
-
-        # update elements
-        self.update_all();
-
-        return;
-    #__init__
 
 #Trayhub
 
 
 ### main ######################################################################
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     tray = Trayhub();
     gtk.main();
     sys.exit(0);
 #if
-    
+
 ### end ########################################################### aczutro ###
