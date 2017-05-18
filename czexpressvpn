@@ -27,9 +27,7 @@
 #
 ###############################################################################
 
-import sys;
-import os;
-import subprocess;
+from subprocess import Popen as _child, PIPE as _pipe;
 
 import pygtk;
 pygtk.require('2.0');
@@ -49,13 +47,9 @@ def call(*args):
     Runs a non-interactive sub-process and returns its outputs and
     exit code.
     '''
-    P = subprocess.Popen(args,
-                         stdin=None,
-                         stdout=subprocess.PIPE,
-                         stderr=subprocess.PIPE
-    );
+    P = _child(args, stdin=None, stdout=_pipe, stderr=_pipe);
     stdout, stderr = P.communicate();
-    return stdout, stderr, P.returncode;
+    return P.returncode, stdout, stderr;
 #call
 
 
@@ -87,7 +81,7 @@ class Trayhub:
 
     def get_status(self):
         '''Updates self.status according to expressvpn status call.'''
-        stdout, stderr, retcode = call(_EXPRESSVPN, 'status');
+        retcode, stdout, stderr = call(_EXPRESSVPN, 'status');
         if retcode != 0:
             return; # if call failed, do nothing
         #if
@@ -113,7 +107,7 @@ class Trayhub:
         if argument is not None:
             command_line.append(argument);
         #if
-        stdout, stderr, retcode = call(*command_line);
+        retcode, stdout, stderr = call(*command_line);
         if retcode != 0:
             message = gtk.MessageDialog(
                 parent=None,
@@ -182,7 +176,7 @@ class Trayhub:
         if argument is not None:
             command_line.append(argument);
         #if
-        stdout, stderr, retcode = call(*command_line);
+        retcode, stdout, stderr = call(*command_line);
         if retcode != 0:
             message = gtk.MessageDialog(
                 parent=None,
@@ -204,7 +198,7 @@ class Trayhub:
 
     def do_disconnect(self, widget):
         '''Disconnect and update status.'''
-        stdout, stderr, retcode = call(_EXPRESSVPN, 'disconnect');
+        retcode, stdout, stderr = call(_EXPRESSVPN, 'disconnect');
         if retcode == 0:
             self.update_all();
         #if
@@ -418,7 +412,7 @@ along with this program.  If not, see http://www.gnu.org/licenses/.</span>
 if __name__ == '__main__':
     tray = Trayhub();
     gtk.main();
-    sys.exit(0);
+    exit(0);
 #if
 
 ### end ########################################################### aczutro ###
