@@ -33,6 +33,7 @@ import pygtk;
 pygtk.require('2.0');
 import gtk;
 import gobject;
+import re
 
 
 ### constants #################################################################
@@ -84,18 +85,23 @@ class Trayhub:
         retcode, stdout, stderr = call(_EXPRESSVPN, 'status');
         if retcode != 0:
             return; # if call failed, do nothing
-        #if
-        output_array = stdout.replace('\n', '').split(' ');
+
+        # Keep only first line of output, and remove formatting
+        # (color, boldness)
+        first_line = stdout.split('\n')[0]
+        to_remove = re.compile(r'\x1B\[[0-?]*[ -/]*[@-~]')
+        output_unformatted = to_remove.sub('', first_line)
+
+        output_array = output_unformatted.replace('\n', '').split(' ');
         first_two = ''.join(output_array[0:2]);
+
         if first_two == 'Notconnected.':
             self.status = None;
         elif first_two == 'Connectedto':
             self.status = ' '.join(output_array[2:]);
         else:
             print('possible bug; expressvpn returned:\n', stdout, stderr);
-        #else
         return;
-    #get_status
 
 
     def get_locations(self, argument):
